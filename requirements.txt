@@ -1,0 +1,6 @@
+streamlit
+praw
+transformers
+torch
+python-dotenv
+plotly

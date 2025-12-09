@@ -1,0 +1,189 @@
+import streamlit as st
+import pandas as pd
+import plotly.express as px
+from datetime import datetime
+from collections import deque
+import logging
+from classifier import AIClassifier
+from reddit_stream import RedditStreamer
+
+# Setup logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# Page Config
+st.set_page_config(
+    page_title="Reddit AI Detector",
+    page_icon="🤖",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
+
+# Custom CSS for aesthetics
+st.markdown("""
+<style>
+    .stApp {
+        background-color: #0e1117;
+    }
+    .css-1d391kg {
+        padding-top: 1rem;
+    }
+    .metric-card {
+        background-color: #262730;
+        padding: 10px;
+        border-radius: 5px;
+        margin-bottom: 10px;
+    }
+    .comment-card {
+        padding: 15px;
+        border-radius: 8px;
+        margin-bottom: 10px;
+        color: white;
+    }
+    .human-card {
+        border-left: 5px solid #00ff00;
+        background-color: #1c2b1c;
+    }
+    .ai-card {
+        border-left: 5px solid #ff0000;
+        background-color: #3b1c1c;
+    }
+</style>
+""", unsafe_allow_html=True)
+
+@st.cache_resource
+def load_classifier():
+    """Load the classifier once and cache it."""
+    return AIClassifier()
+
+def main():
+    st.title("🤖 Reddit Live AI Detector")
+    st.markdown("Real-time stream analysis of Reddit comments to detect AI-generated text.")
+
+    # Sidebar
+    st.sidebar.header("Configuration")
+    subreddit = st.sidebar.text_input("Subreddit", value="test")
+    start_btn = st.sidebar.button("Start Streaming")
+    stop_btn = st.sidebar.button("Stop Streaming") # Basic state control
+
+    # Logic for session state
+    if 'streaming' not in st.session_state:
+        st.session_state.streaming = False
+    if 'comments_data' not in st.session_state:
+        st.session_state.comments_data = deque(maxlen=100) # Keep last 100 for stats
+    if 'total_processed' not in st.session_state:
+        st.session_state.total_processed = 0
+    if 'total_ai' not in st.session_state:
+        st.session_state.total_ai = 0
+
+    if start_btn:
+        st.session_state.streaming = True
+    if stop_btn:
+        st.session_state.streaming = False
+
+    # Layout: Stats on top, Feed below
+    col1, col2, col3, col4 = st.columns(4)
+    with col1:
+        total_metric = st.empty()
+    with col2:
+        ai_pct_metric = st.empty()
+    with col3:
+        human_pct_metric = st.empty()
+    with col4:
+        last_pred_metric = st.empty()
+
+    chart_placeholder = st.empty()
+    feed_placeholder = st.empty()
+    status_placeholder = st.empty()
+
+    # Load resources
+    try:
+        with st.spinner("Loading AI Model (this may take a moment)..."):
+            classifier = load_classifier()
+    except Exception as e:
+        st.error(f"Failed to load model: {e}")
+        return
+
+    streamer = RedditStreamer()
+
+    if st.session_state.streaming:
+        status_placeholder.info(f"Streaming r/{subreddit}...")
+        
+        # The Stream Loop
+        # Note: In Streamlit, long running loops block interactions. 
+        # This is a simple implementation. For production, asynchronous queues are better.
+        try:
+            for comment in streamer.stream_comments(subreddit):
+                if not st.session_state.streaming:
+                    break
+
+                if "error" in comment:
+                    status_placeholder.error(f"Error: {comment['error']}")
+                    break
+
+                # Classify
+                prediction = classifier.predict(comment['body'])
+                
+                # Update Stats
+                st.session_state.total_processed += 1
+                is_ai = prediction['label'] == 'AI'
+                if is_ai:
+                    st.session_state.total_ai += 1
+                
+                comment_entry = {
+                    'author': comment['author'],
+                    'body': comment['body'],
+                    'label': prediction['label'],
+                    'score': prediction['score'],
+                    'time': datetime.now().strftime("%H:%M:%S")
+                }
+                st.session_state.comments_data.appendleft(comment_entry) # Newest first
+
+                # Update Metrics
+                total = st.session_state.total_processed
+                ai_count = st.session_state.total_ai
+                human_count = total - ai_count
+                
+                total_metric.metric("Processed", total)
+                ai_pct_metric.metric("AI %", f"{(ai_count/total)*100:.1f}%" if total else "0%")
+                human_pct_metric.metric("Human %", f"{(human_count/total)*100:.1f}%" if total else "0%")
+                last_pred_metric.metric("Last", prediction['label'], delta=f"{prediction['score']:.2f}")
+
+                # Update Chart
+                if len(st.session_state.comments_data) > 0:
+                    df = pd.DataFrame(st.session_state.comments_data)
+                    # Simple count over time or just recent history distribution
+                    fig = px.pie(names=['AI', 'Human'], values=[ai_count, human_count], 
+                                 title="Detection Distribution (Session)", hole=0.4,
+                                 color_discrete_map={'AI':'red', 'Human':'green'})
+                    fig.update_layout(paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", font_color="white", height=300)
+                    chart_placeholder.plotly_chart(fig, use_container_width=True)
+
+                    # Time Series Chart
+                    fig_time = px.scatter(df, x='time', y='score', color='label',
+                                          title="Confidence Score / Time",
+                                          color_discrete_map={'AI':'red', 'Human':'green'},
+                                          range_y=[0, 1])
+                    fig_time.update_layout(paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", font_color="white", height=300)
+                    st.plotly_chart(fig_time, use_container_width=True)
+
+                # Update Feed (Show last 5)
+                feed_html = ""
+                for c in list(st.session_state.comments_data)[:10]:
+                    color_class = "ai-card" if c['label'] == "AI" else "human-card"
+                    feed_html += f"""
+                    <div class="comment-card {color_class}">
+                        <small>{c['time']} | u/{c['author']} | <b>{c['label']}</b> ({c['score']:.2f})</small><br>
+                        {c['body'][:200]}{'...' if len(c['body'])>200 else ''}
+                    </div>
+                    """
+                feed_placeholder.markdown(feed_html, unsafe_allow_html=True)
+                
+        except Exception as e:
+            status_placeholder.error(f"Stream Crashed: {e}")
+            st.session_state.streaming = False
+    else:
+        status_placeholder.warning("Stream stopped. Press Start to begin.")
+
+if __name__ == "__main__":
+    main()
