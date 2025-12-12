@@ -87,7 +87,6 @@ def run_query(query: dict, limit: int = 10):
         return []
 
     try:
-    try:
         collection = db['comments']
         # Fix ObjectId in query
         query = fix_oid(query)
@@ -137,6 +136,8 @@ def update_document(filter_query: dict, update_data: dict, is_raw_update: bool =
         
         # Fix ObjectId in filter
         filter_query = fix_oid(filter_query)
+        
+        logger.info(f"DEBUG UPDATE: Filter={filter_query}, Update={update_op}")
         
         result = db['comments'].update_one(filter_query, update_op)
         return {
