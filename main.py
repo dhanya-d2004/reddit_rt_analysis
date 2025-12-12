@@ -4,9 +4,10 @@ import plotly.express as px
 from datetime import datetime
 from collections import deque
 import logging
+import json
 from classifier import AIClassifier
 from reddit_stream import RedditStreamer
-from database import save_comment
+from database import save_comment, run_query, create_document, update_document, delete_document
 
 # Setup logging
 logging.basicConfig(level=logging.INFO)
@@ -66,6 +67,76 @@ def main():
     subreddit = st.sidebar.text_input("Subreddit", value="test")
     start_btn = st.sidebar.button("Start Streaming")
     stop_btn = st.sidebar.button("Stop Streaming") # Basic state control
+    
+    st.sidebar.divider()
+    st.sidebar.subheader("Database Manager")
+    
+    crud_mode = st.sidebar.selectbox("Operation", ["Read (Query)", "Create (Insert)", "Update", "Delete"])
+    
+    if crud_mode == "Read (Query)":
+        with st.sidebar.expander("Read", expanded=True):
+            query_input = st.text_area("Filter (JSON)", value="{}", height=100, key="read_q")
+            limit_input = st.number_input("Limit", value=10, min_value=1, max_value=100)
+            if st.button("Find Documents"):
+                try:
+                    query_dict = json.loads(query_input)
+                    results = run_query(query_dict, limit=limit_input)
+                    st.sidebar.success(f"Found {len(results)} docs")
+                    if results:
+                        st.json(results)
+                    else:
+                        st.info("No results found.")
+                except Exception as e:
+                    st.sidebar.error(f"Error: {e}")
+
+    elif crud_mode == "Create (Insert)":
+        with st.sidebar.expander("Create", expanded=True):
+            doc_input = st.text_area("Document (JSON)", value='{"test": "data"}', height=100, key="create_q")
+            if st.button("Insert Document"):
+                try:
+                    doc_dict = json.loads(doc_input)
+                    result = create_document(doc_dict)
+                    if "error" in result:
+                        st.sidebar.error(result['error'])
+                    else:
+                        st.sidebar.success(f"Inserted ID: {result['inserted_id']}")
+                        st.json(result)
+                except Exception as e:
+                    st.sidebar.error(f"Error: {e}")
+
+    elif crud_mode == "Update":
+        with st.sidebar.expander("Update", expanded=True):
+            filter_input = st.text_area("Filter (JSON)", value='{"test": "data"}', height=70, key="update_f")
+            update_input = st.text_area("Update (JSON)", value='{"test": "updated"}', height=70, key="update_u")
+            is_raw = st.sidebar.checkbox("Raw Update Operator?", value=False, help="Uncheck to wrap in $set")
+            
+            if st.button("Update Document"):
+                try:
+                    filter_dict = json.loads(filter_input)
+                    update_dict = json.loads(update_input)
+                    result = update_document(filter_dict, update_dict, is_raw)
+                    if "error" in result:
+                        st.sidebar.error(result['error'])
+                    else:
+                        st.sidebar.success(f"Modified: {result['modified_count']}")
+                        st.json(result)
+                except Exception as e:
+                    st.sidebar.error(f"Error: {e}")
+
+    elif crud_mode == "Delete":
+        with st.sidebar.expander("Delete", expanded=True):
+            filter_input = st.text_area("Filter (JSON)", value='{"test": "updated"}', height=100, key="delete_f")
+            if st.button("Delete Document"):
+                try:
+                    filter_dict = json.loads(filter_input)
+                    result = delete_document(filter_dict)
+                    if "error" in result:
+                        st.sidebar.error(result['error'])
+                    else:
+                        st.sidebar.success(f"Deleted: {result['deleted_count']}")
+                        st.json(result)
+                except Exception as e:
+                    st.sidebar.error(f"Error: {e}")
 
     # Logic for session state
     if 'streaming' not in st.session_state:
