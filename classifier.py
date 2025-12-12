@@ -16,8 +16,9 @@ class AIClassifier:
         
         try:
             self.classifier = pipeline("zero-shot-classification", model=model_name, device=self.device)
+            self.sentiment_analyzer = pipeline("sentiment-analysis", model="distilbert-base-uncased-finetuned-sst-2-english", device=self.device)
             self.candidate_labels = ["human", "ai"]
-            logger.info("Model loaded successfully.")
+            logger.info("Models loaded successfully.")
         except Exception as e:
             logger.error(f"Failed to load model: {e}")
             raise e
@@ -39,12 +40,20 @@ class AIClassifier:
             top_label = result['labels'][0]
             top_score = result['scores'][0]
             
+            
+            # Sentiment Analysis
+            sent_result = self.sentiment_analyzer(text)[0]
+            sentiment_label = sent_result['label'] # POSITIVE or NEGATIVE
+            sentiment_score = sent_result['score']
+
             # Map back to capitalized labels for UI
             label_map = {"human": "Human", "ai": "AI"}
             
             return {
                 'label': label_map.get(top_label, top_label),
-                'score': top_score
+                'score': top_score,
+                'sentiment': sentiment_label,
+                'sentiment_score': sentiment_score
             }
         except Exception as e:
             logger.error(f"Prediction error: {e}")

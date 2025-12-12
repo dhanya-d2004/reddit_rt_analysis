@@ -23,6 +23,18 @@ A Python application that streams Reddit comments in real-time and classifies th
    # Edit .env with your REDDIT_CLIENT_ID, REDDIT_SECRET, and USER_AGENT
    ```
 
+### Enabling GPU Support (Optional but Recommended)
+Standard `pip install torch` often installs the CPU-only version. To use your NVIDIA GPU:
+
+1. Uninstall current torch:
+   ```bash
+   pip uninstall torch torchvision torchaudio
+   ```
+2. Install CUDA-enabled version (adjust `cu121` to your CUDA version):
+   ```bash
+   pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+   ```
+
 ### Running Locally
 
 1. Install dependencies:

@@ -6,6 +6,7 @@ from collections import deque
 import logging
 from classifier import AIClassifier
 from reddit_stream import RedditStreamer
+from database import save_comment
 
 # Setup logging
 logging.basicConfig(level=logging.INFO)
@@ -75,6 +76,8 @@ def main():
         st.session_state.total_processed = 0
     if 'total_ai' not in st.session_state:
         st.session_state.total_ai = 0
+    if 'total_negative' not in st.session_state:
+        st.session_state.total_negative = 0
 
     if start_btn:
         st.session_state.streaming = True
@@ -82,7 +85,7 @@ def main():
         st.session_state.streaming = False
 
     # Layout: Stats on top, Feed below
-    col1, col2, col3, col4 = st.columns(4)
+    col1, col2, col3, col4, col5 = st.columns(5)
     with col1:
         total_metric = st.empty()
     with col2:
@@ -90,6 +93,8 @@ def main():
     with col3:
         human_pct_metric = st.empty()
     with col4:
+        neg_metric = st.empty()
+    with col5:
         last_pred_metric = st.empty()
 
     chart_placeholder = st.empty()
@@ -130,11 +135,28 @@ def main():
                 if is_ai:
                     st.session_state.total_ai += 1
                 
+                is_negative = prediction['sentiment'] == 'NEGATIVE'
+                if is_negative:
+                    st.session_state.total_negative += 1
+                
+                # Save to MongoDB
+                # Merge original comment data with prediction
+                db_data = comment.copy()
+                db_data.update({
+                    'ai_label': prediction['label'],
+                    'ai_score': prediction['score'],
+                    'sentiment': prediction['sentiment'],
+                    'sentiment_score': prediction['sentiment_score'],
+                    'analyzed_at': datetime.utcnow()
+                })
+                save_comment(db_data)
+                
                 comment_entry = {
                     'author': comment['author'],
                     'body': comment['body'],
                     'label': prediction['label'],
                     'score': prediction['score'],
+                    'sentiment': prediction['sentiment'],
                     'time': datetime.now().strftime("%H:%M:%S")
                 }
                 st.session_state.comments_data.appendleft(comment_entry) # Newest first
@@ -143,10 +165,12 @@ def main():
                 total = st.session_state.total_processed
                 ai_count = st.session_state.total_ai
                 human_count = total - ai_count
+                neg_count = st.session_state.total_negative
                 
                 total_metric.metric("Processed", total)
                 ai_pct_metric.metric("AI %", f"{(ai_count/total)*100:.1f}%" if total else "0%")
                 human_pct_metric.metric("Human %", f"{(human_count/total)*100:.1f}%" if total else "0%")
+                neg_metric.metric("Negative %", f"{(neg_count/total)*100:.1f}%" if total else "0%")
                 last_pred_metric.metric("Last", prediction['label'], delta=f"{prediction['score']:.2f}")
 
                 # Update Chart
@@ -168,16 +192,31 @@ def main():
                     st.plotly_chart(fig_time, use_container_width=True)
 
                 # Update Feed (Show last 5)
-                feed_html = ""
-                for c in list(st.session_state.comments_data)[:10]:
-                    color_class = "ai-card" if c['label'] == "AI" else "human-card"
-                    feed_html += f"""
-                    <div class="comment-card {color_class}">
-                        <small>{c['time']} | u/{c['author']} | <b>{c['label']}</b> ({c['score']:.2f})</small><br>
-                        {c['body'][:200]}{'...' if len(c['body'])>200 else ''}
-                    </div>
-                    """
-                feed_placeholder.markdown(feed_html, unsafe_allow_html=True)
+                with feed_placeholder.container():
+                    # Clear previous content is automatic if we overwrite the placeholder content? 
+                    # Actually, if we use a placeholder and write to it, it replaces.
+                    # But for a list of items, we need to construct them inside the 'with'.
+                    # Wait, st.empty() only holds one element. We need a container.
+                    
+                    # Better approach: Clear the placeholder first or just overwrite it with a new container context
+                    pass 
+                
+                # To make this efficient in the loop, we construct the list and write it.
+                # Since 'feed_placeholder' was an st.empty(), we can use it as a container context.
+                with feed_placeholder.container():
+                    for c in list(st.session_state.comments_data)[:10]:
+                        # Use chat_message for native "feed" look
+                        role = "assistant" if c['label'] == 'AI' else "user"
+                        avatar = "🤖" if c['label'] == 'AI' else "👤"
+                        
+                        sent_emoji = "👍" if c['sentiment'] == 'POSITIVE' else "👎"
+                        sentiment_text = f"**{c['sentiment']}**" if c['sentiment'] == 'NEGATIVE' else c['sentiment']
+                        
+                        with st.chat_message(role, avatar=avatar):
+                            # Header line
+                            st.markdown(f"**u/{c['author']}** • {c['label']} ({c['score']:.2f}) • {sent_emoji} {sentiment_text}")
+                            st.write(c['body'])
+                            st.caption(f"Posted at {c['time']}")
                 
         except Exception as e:
             status_placeholder.error(f"Stream Crashed: {e}")
